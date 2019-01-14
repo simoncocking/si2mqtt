@@ -62,47 +62,18 @@ struct Packet<'a> {
 	_checksum: u16,
 }
 
-#[derive(Debug)]
-struct Genset {
-	engaged: bool,
-	requested: bool,
-	output: f32,
-}
-#[derive(Debug)]
-struct Battery {
-	fan: bool,
-	charge: u8,
-	health: u8,
-}
-#[derive(Debug)]
-enum Flow {
-	Charge,
-	Discharge,
-	Unknown,
-}
-#[derive(Debug)]
-struct Status {
-	flow: Flow,
-	load: f32,
-	genset: Genset,
-	battery: Battery,
-}
-
 fn main() {
-	let mut status: Status = Status {
-		flow: Flow::Unknown,
+	let mut status: HashMap<&str, String> = HashMap::new();
+	/* 
+		flow: charge|discharge,
 		load: 0.0,
-		genset: Genset {
-			engaged: false,
-			requested: false,
-			output: 0.0,
-		},
-		battery: Battery {
-			fan: false,
-			charge: 100,
-			health: 100,
-		},
-	};
+		genset/engaged: false,
+		genset/requested: false,
+		genset/output: 0.0,
+		battery/fan: false,
+		battery/charge: 100,
+		battery/health: 100,
+	*/
 	let args: Args = Docopt::new(USAGE)
 		.and_then(|d| d.deserialize())
 		.unwrap_or_else(|e| e.exit());
@@ -133,7 +104,7 @@ fn main() {
 	}
 }
 
-fn parse(chunk: &mut Vec<u8>, status: &mut Status) -> usize {
+fn parse(chunk: &mut Vec<u8>, status: &mut HashMap<&str, String>) -> usize {
 	println!("Decoding {} bytes", chunk.len());
 	for b in chunk.iter() {
 		print!("{:00x} ", b);
@@ -174,13 +145,18 @@ fn parse(chunk: &mut Vec<u8>, status: &mut Status) -> usize {
 	return unprocessed;
 }
 
-fn decode(packet: Packet, status: &mut Status) {
+fn decode(packet: Packet, status: &mut HashMap<&str, String>) -> () {
 	// println!("{:?}", packet);
 	// let payload = OsString::from_vec(packet.payload.clone());
 	// let payload = payload.to_string_lossy();
 	match packet.header.row {
 		1 => {
-			status.genset.engaged = packet.payload[0] == 0x03 && packet.payload[4] != 0xa4;
+			status.insert("genset/engaged",
+				match packet.payload[0] == 0x03 && packet.payload[4] != 0xa4 {
+					true  => "1".to_string(),
+					false => "0".to_string(),
+				}
+			);
 		},
 		2 => {
 			let re = Regex::new(r"^(\d+\.\d)kW\s+(\x01|\x02)\s+(-?\d+\.\d+)kW.+?(o|\x06)(o|\x06)").unwrap();
@@ -195,59 +171,48 @@ fn decode(packet: Packet, status: &mut Status) {
 						 .to_vec())
 					.unwrap())
 				  .collect();
-			status.genset.output = caps[1].parse().unwrap();
-			status.flow = match caps[2].as_str() {
-				"\u{1}" => Flow::Charge,
-				"\u{2}" => Flow::Discharge,
-				_       => Flow::Unknown,
-			};
-			status.load = caps[3].parse().unwrap();
-			status.battery.fan = caps[4] != "o";
-			status.genset.requested = caps[5] != "o";
+			status.insert("genset/output", caps[1].parse().unwrap());
+			status.insert("flow",
+				match caps[2].as_str() {
+					"\u{1}" => "charge".to_string(),
+					"\u{2}" => "discharge".to_string(),
+					_       => "unknown".to_string(),
+				}
+			);
+			status.insert("load", caps[3].parse().unwrap());
+			status.insert("battery/fan", match caps[4] != "o" { true => "1".to_string(), false => "0".to_string() });
+			status.insert("genset/requested", match caps[5] != "o" { true => "1".to_string(), false => "0".to_string() });
 		},
 		3 => {
 			let re = Regex::new(r"^[\*!\?]").unwrap();
 			match re.captures(packet.payload.as_slice()) {
 				Some(c) => {
-					status.genset.engaged = match c[0][0] {
-						33 if status.genset.output == 0.0 => false,
-						_ => true,
+					match status.clone().get(&"genset/output") {
+						Some(o) => status.insert("genset/engaged", match c[0][0] {
+							33 if o == &"0.0".to_string() => "0".to_string(),
+							_ => "1".to_string(),
+						}),
+						None => Some("".to_string()),
 					};
 				},
 				None => {
-					status.genset.engaged = false;
+					status.insert("genset/engaged", "0".to_string());
 				}
 			};
 		},
 		4 => {
 			let re = Regex::new(r"\s+(\d+)%\s+\d{2}:\d{2}:\d{2}").unwrap();
 			let caps = re.captures(packet.payload.as_slice()).unwrap();
-			status.battery.charge = String::from_utf8(caps[1].to_vec()).unwrap().parse().unwrap();
+			status.insert("battery/charge", String::from_utf8(caps[1].to_vec()).unwrap().parse().unwrap());
 		},
 		_ => {},
 	}
 	// println!("{:?}", payload);
 }
 
-fn mqtt_publish(m: &Mosquitto, topic: &String, status: &Status) {
-	println!("{:?}", status);
-	let mut update = HashMap::new();
-	update.insert("flow", 
-		match status.flow {
-			Flow::Charge    => "charge",
-			Flow::Discharge => "discharge",
-			_               => "unknown"
-		}
-	);
-	update.insert("load", status.load.to_string());
-	update.insert("genset/engaged", match status.genset.engaged {true => "1", false => "0"});
-	update.insert("genset/requested", match status.genset.requested {true => "1", false => "0"});
-	update.insert("genset/output", status.genset.output.to_string());
-	update.insert("battery/fan", match status.battery.fan {true => "1", false => "0"});
-	update.insert("battery/charge", status.battery.charge.to_string());
-	update.insert("battery/health", status.battery.health.to_string());
-	println!("UPDATE {:?}", update);
-	for (k,v) in &update {
+fn mqtt_publish(m: &Mosquitto, topic: &String, status: &HashMap<&str, String>) {
+	println!("STATUS {:?}", status);
+	for (k,v) in status {
 		let t = format!("{}/{}", topic, k);
 		let _mid = m.publish(t.as_str(), v.as_bytes(), 2, false);
 	}
