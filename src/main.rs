@@ -40,7 +40,7 @@ struct Args {
 
 // begin addr ctrl  head  pad0 mode col row pad1        payload       cksm end
 // 7e    ff   03    4243  01   0b   01  01  00 00 00 00 Some data 00  dead 7e
-// #[derive(Debug)]
+#[derive(Debug)]
 #[repr(C, packed)]
 struct Header {
 	begin: u8,
@@ -54,8 +54,7 @@ struct Header {
 	pad1: u32,
 }
 
-// #[derive(Debug)]
-// #[repr(C, packed)]
+#[derive(Debug)]
 struct Packet<'a> {
 	header: &'a Header,
 	payload: Vec<u8>,
@@ -98,18 +97,21 @@ fn main() {
 		if bytes > 0 {
 			chunk.truncate(bytes);
 			buf.append(&mut chunk);
-			parse(&mut buf, &mut status);
+			for packet in parse(&mut buf) {
+				decode(packet, &mut status);
+			}
 		}
 		mqtt_publish(&m, &args.flag_topic, &status);
 	}
 }
 
-fn parse(chunk: &mut Vec<u8>, status: &mut HashMap<&str, String>) -> usize {
+fn parse(chunk: &mut Vec<u8>) -> Vec<Packet> {
 	println!("Decoding {} bytes", chunk.len());
 	for b in chunk.iter() {
 		print!("{:00x} ", b);
 	}
 	println!("");
+	let mut packets: Vec<Packet> = Vec::new();
 	let mut iter: usize = 0;
 	let mut packet_start: usize = 0;
 	while iter < chunk.len() - size_of::<Header>() {
@@ -123,11 +125,11 @@ fn parse(chunk: &mut Vec<u8>, status: &mut HashMap<&str, String>) -> usize {
 				for null in payload .. chunk.len() - 3 { // 3 bytes allowance for checksum/terminator
 					if chunk[null] == 0x00 {
 						// End of payload
-						decode(Packet {
+						packets.push(Packet {
 							header: header,
 							payload: chunk[payload .. null].to_vec(),
 							_checksum: ((chunk[null+1] as u16) << 8) + (chunk[null+2] as u16),
-						}, status);
+						});
 						iter = null + 3;
 						packet_start = iter + 1;
 						break;
@@ -139,10 +141,9 @@ fn parse(chunk: &mut Vec<u8>, status: &mut HashMap<&str, String>) -> usize {
 		}
 		iter += 1;
 	}
-	let unprocessed = chunk.len() - packet_start;
+	println!("Returning {} unprocessed bytes", chunk.len() - packet_start);
 	*chunk = chunk[packet_start..].to_vec();
-	println!("Returning {} unprocessed bytes", unprocessed);
-	return unprocessed;
+	return packets;
 }
 
 fn decode(packet: Packet, status: &mut HashMap<&str, String>) -> () {
@@ -185,20 +186,23 @@ fn decode(packet: Packet, status: &mut HashMap<&str, String>) -> () {
 		},
 		3 => {
 			let re = Regex::new(r"^[\*!\?]").unwrap();
-			match re.captures(packet.payload.as_slice()) {
+			let engaged = match re.captures(packet.payload.as_slice()) {
 				Some(c) => {
-					match status.clone().get(&"genset/output") {
-						Some(o) => status.insert("genset/engaged", match c[0][0] {
-							33 if o == &"0.0".to_string() => "0".to_string(),
-							_ => "1".to_string(),
-						}),
-						None => Some("".to_string()),
+					let s = status.clone();
+					let output = match s.get(&"genset/output") {
+						Some(o) => o,
+						None    => "",
 					};
+					match c[0][0] {
+						33 if output == "0.0" => "0",
+						_ => "1"
+					}
 				},
 				None => {
-					status.insert("genset/engaged", "0".to_string());
+					"0"
 				}
 			};
+			status.insert("genset/engaged", engaged.to_string());
 		},
 		4 => {
 			let re = Regex::new(r"\s+(\d+)%\s+\d{2}:\d{2}:\d{2}").unwrap();
