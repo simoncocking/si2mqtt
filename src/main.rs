@@ -3,18 +3,20 @@ extern crate serde_derive;
 extern crate docopt;
 extern crate mosquitto_client as mosq;
 extern crate regex;
+extern crate tokio;
+extern crate futures;
 
-use docopt::Docopt;
-use std::error::Error;
-use std::io::prelude::*;
-use std::fs::File;
 use std::path::Path;
+use docopt::Docopt;
+use tokio::prelude::*;
 use std::collections::HashMap;
-// use std::ffi::OsString;
-// use std::os::unix::ffi::OsStringExt;
 use std::mem::size_of;
 use regex::bytes::Regex;
 use mosq::Mosquitto;
+use futures::io::Error;
+use tokio::timer::Interval;
+use std::time::{Duration, Instant};
+use std::sync::Arc;
 
 const USAGE: &'static str = "
 si2mqtt: Read data off the SMA Sunny Island RS485 display bus
@@ -62,7 +64,7 @@ struct Packet<'a> {
 }
 
 fn main() {
-	let mut status: HashMap<&str, String> = HashMap::new();
+	let mut status: Arc<HashMap<&str, String>> = Arc::new(HashMap::new());
 	/* 
 		flow: charge|discharge,
 		load: 0.0,
@@ -73,36 +75,56 @@ fn main() {
 		battery/charge: 100,
 		battery/health: 100,
 	*/
-	let args: Args = Docopt::new(USAGE)
+	let args: Arc<Args> = Arc::new(
+		Docopt::new(USAGE)
 		.and_then(|d| d.deserialize())
-		.unwrap_or_else(|e| e.exit());
+		.unwrap_or_else(|e| e.exit())
+	);
 
-	let m = Mosquitto::new("test");
-	m.connect(&args.flag_mqtt, 1883).expect("Cannot connect");
+	let m = Arc::new(Mosquitto::new("test"));
+	m.connect(&args.flag_mqtt, 1883).expect("Cannot connect to mqtt broker");
 
-	let path = Path::new(args.flag_port.as_str());
-	let mut port = match File::open(&path) {
-		Err(e) => panic!("Couldn't open {} for reading: {}",
-			path.display(), e.description()),
-		Ok(f) => f,
-	};
-	let mut bytes = 1;
+
+	let timer = Interval::new(Instant::now(), Duration::from_millis(5000))
+		.for_each(move |_t| {
+			let m = Arc::clone(&m);
+			let args = Arc::clone(&args);
+			let status = Arc::clone(&status);
+			mqtt_publish(&m, &args.flag_topic, &status);
+			Ok(())
+		})
+		.map_err(|e| panic!("timer error {:?}", e));
+
+
+	let path = Path::new(&args.flag_port);
+	let filename = Arc::new(path);
+	let port = tokio::fs::File::open(Arc::clone(&filename))
+		.and_then(|file| { tokio::spawn(timer); Ok(file) })
+		.and_then(move |file| read_data(file, &mut Arc::clone(&status)))
+		.map_err(|e| panic!("Unable to open file.txt {:?}", e));
+
+	tokio::run(port);
+}
+
+fn read_data(mut file: tokio::fs::File, mut status: &mut HashMap<&str, String>) -> Result<(), Error> {
 	let mut buf = Vec::new();
-	while bytes != 0 {
+	loop {
 		let mut chunk = vec![0u8; 40];
-		bytes = match port.read(&mut chunk) {
-			Err(_) => panic!("Unable to read"),
-			Ok(n)  => n,
+		let bytes = match file.poll_read(&mut chunk) {
+			Ok(Async::Ready(n)) => n,
+			Ok(Async::NotReady) => 0,
+			Err(e) => return Err(e)
 		};
-		if bytes > 0 {
-			chunk.truncate(bytes);
-			buf.append(&mut chunk);
-			for packet in parse(&mut buf) {
-				decode(packet, &mut status);
-			}
+		if bytes == 0 {
+			break;
 		}
-		mqtt_publish(&m, &args.flag_topic, &status);
+		chunk.truncate(bytes);
+		buf.append(&mut chunk);
+		for packet in parse(&mut buf) {
+			decode(packet, &mut status);
+		}
 	}
+	Ok(())
 }
 
 fn parse(chunk: &mut Vec<u8>) -> Vec<Packet> {
@@ -214,17 +236,11 @@ fn decode(packet: Packet, status: &mut HashMap<&str, String>) -> () {
 	// println!("{:?}", payload);
 }
 
-fn mqtt_publish(m: &Mosquitto, topic: &String, status: &HashMap<&str, String>) {
+fn mqtt_publish(m: &Mosquitto, topic: &String, status: &HashMap<&str, String>) -> Result<(), std::io::Error> {
 	println!("STATUS {:?}", status);
-	for (k,v) in status {
-		let t = format!("{}/{}", topic, k);
-		let _mid = m.publish(t.as_str(), v.as_bytes(), 2, false);
-	}
-	// m.subscribe("power/#", 1).expect("Cannot subscribe");
-	// let mut mc = m.callbacks(0);
-	// mc.on_message(|_data,msg| {
-	// 	println!("received {:?} = {}", msg.topic(), msg.text());
-	// });
-	// m.loop_until_disconnect(200).expect("Broken loop");
-	// println!("Received {} messages", mc.data);
+	// for (k,v) in status {
+	// 	let t = format!("{}/{}", topic, k);
+	// 	let _mid = m.publish(t.as_str(), v.as_bytes(), 2, false);
+	// }
+	Ok(())
 }
