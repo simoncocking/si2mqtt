@@ -10,8 +10,6 @@ use std::io::prelude::*;
 use std::fs::File;
 use std::path::Path;
 use std::collections::HashMap;
-// use std::ffi::OsString;
-// use std::os::unix::ffi::OsStringExt;
 use std::mem::size_of;
 use regex::bytes::Regex;
 use mosq::Mosquitto;
@@ -40,7 +38,7 @@ struct Args {
 
 // begin addr ctrl  head  pad0 mode col row pad1        payload       cksm end
 // 7e    ff   03    4243  01   0b   01  01  00 00 00 00 Some data 00  dead 7e
-#[derive(Debug)]
+#[derive(Debug, Copy)]
 #[repr(C, packed)]
 struct Header {
 	begin: u8,
@@ -52,6 +50,22 @@ struct Header {
 	col: u8,
 	row: u8,
 	pad1: u32,
+}
+
+impl Clone for Header {
+	fn clone(&self) -> Self {
+		Self {
+			begin: self.begin,
+			addr: self.addr,
+			ctrl: self.ctrl,
+			head: self.head,
+			pad0: self.pad0,
+			mode: self.mode,
+			col:  self.col,
+			row:  self.row,
+			pad1: self.pad1,
+		}
+	}
 }
 
 #[derive(Debug)]
@@ -147,9 +161,6 @@ fn parse(chunk: &mut Vec<u8>) -> Vec<Packet> {
 }
 
 fn decode(packet: Packet, status: &mut HashMap<&str, String>) -> () {
-	// println!("{:?}", packet);
-	// let payload = OsString::from_vec(packet.payload.clone());
-	// let payload = payload.to_string_lossy();
 	match packet.header.row {
 		1 => {
 			status.insert("genset/engaged",
@@ -211,7 +222,6 @@ fn decode(packet: Packet, status: &mut HashMap<&str, String>) -> () {
 		},
 		_ => {},
 	}
-	// println!("{:?}", payload);
 }
 
 fn mqtt_publish(m: &Mosquitto, topic: &String, status: &HashMap<&str, String>) {
@@ -220,11 +230,4 @@ fn mqtt_publish(m: &Mosquitto, topic: &String, status: &HashMap<&str, String>) {
 		let t = format!("{}/{}", topic, k);
 		let _mid = m.publish(t.as_str(), v.as_bytes(), 2, false);
 	}
-	// m.subscribe("power/#", 1).expect("Cannot subscribe");
-	// let mut mc = m.callbacks(0);
-	// mc.on_message(|_data,msg| {
-	// 	println!("received {:?} = {}", msg.topic(), msg.text());
-	// });
-	// m.loop_until_disconnect(200).expect("Broken loop");
-	// println!("Received {} messages", mc.data);
 }
