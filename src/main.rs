@@ -36,34 +36,34 @@ struct Args {
 	flag_topic: String,
 }
 
-// begin addr ctrl  head  pad0 mode col row pad1        payload       cksm end
-// 7e    ff   03    4243  01   0b   01  01  00 00 00 00 Some data 00  dead 7e
+// flag addr ctrl proto vers mode col row pad         payload       cksm end
+// 7e   ff   03   4243  01   0b   01  01  00 00 00 00 Some data 00  dead 7e
 #[derive(Debug, Copy)]
 #[repr(C, packed)]
 struct Header {
-	begin: u8,
+	flag: u8,
 	addr: u8,
 	ctrl: u8,
-	head: u16,
-	pad0: u8,
+	proto: u16,
+	vers: u8,
 	mode: u8,
 	col: u8,
 	row: u8,
-	pad1: u32,
+	pad: u32,
 }
 
 impl Clone for Header {
 	fn clone(&self) -> Self {
 		Self {
-			begin: self.begin,
-			addr: self.addr,
-			ctrl: self.ctrl,
-			head: self.head,
-			pad0: self.pad0,
-			mode: self.mode,
-			col:  self.col,
-			row:  self.row,
-			pad1: self.pad1,
+			flag:  self.flag,
+			addr:  self.addr,
+			ctrl:  self.ctrl,
+			proto: self.proto,
+			vers:  self.vers,
+			mode:  self.mode,
+			col:   self.col,
+			row:   self.row,
+			pad:   self.pad,
 		}
 	}
 }
@@ -131,8 +131,7 @@ fn parse(chunk: &mut Vec<u8>) -> Vec<Packet> {
 	while iter < chunk.len() - size_of::<Header>() {
 		if chunk[iter] == 0x7e && chunk[iter+1] == 0xff {
 			let header: *const u8 = chunk[iter..].as_ptr();
-			let header: *const Header = header as *const Header;
-			let header: &Header = unsafe { &*header };
+			let header: &Header = unsafe { &*(header as *const Header) };
 			let payload = iter + size_of::<Header>();
 			if header.mode == 0x0b {
 				// This is a display update
