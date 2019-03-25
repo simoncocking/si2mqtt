@@ -4,17 +4,20 @@ extern crate docopt;
 extern crate mosquitto_client as mosq;
 extern crate regex;
 
+pub mod parse;
+pub mod decode;
+pub mod ppp_packet;
+
 use docopt::Docopt;
 use std::error::Error;
 use std::io::prelude::*;
 use std::fs::File;
 use std::path::Path;
 use std::collections::HashMap;
-// use std::ffi::OsString;
-// use std::os::unix::ffi::OsStringExt;
-use std::mem::size_of;
-use regex::bytes::Regex;
 use mosq::Mosquitto;
+
+use parse::parse;
+use decode::decode;
 
 const USAGE: &'static str = "
 si2mqtt: Read data off the SMA Sunny Island RS485 display bus
@@ -36,29 +39,6 @@ struct Args {
 	flag_port: String,
 	flag_mqtt: String,
 	flag_topic: String,
-}
-
-// begin addr ctrl  head  pad0 mode col row pad1        payload       cksm end
-// 7e    ff   03    4243  01   0b   01  01  00 00 00 00 Some data 00  dead 7e
-#[derive(Debug)]
-#[repr(C, packed)]
-struct Header {
-	begin: u8,
-	addr: u8,
-	ctrl: u8,
-	head: u16,
-	pad0: u8,
-	mode: u8,
-	col: u8,
-	row: u8,
-	pad1: u32,
-}
-
-#[derive(Debug)]
-struct Packet<'a> {
-	header: &'a Header,
-	payload: Vec<u8>,
-	_checksum: u16,
 }
 
 fn main() {
@@ -103,115 +83,6 @@ fn main() {
 		}
 		mqtt_publish(&m, &args.flag_topic, &status);
 	}
-}
-
-fn parse(chunk: &mut Vec<u8>) -> Vec<Packet> {
-	println!("Decoding {} bytes", chunk.len());
-	for b in chunk.iter() {
-		print!("{:00x} ", b);
-	}
-	println!("");
-	let mut packets: Vec<Packet> = Vec::new();
-	let mut iter: usize = 0;
-	let mut packet_start: usize = 0;
-	while iter < chunk.len() - size_of::<Header>() {
-		if chunk[iter] == 0x7e && chunk[iter+1] == 0xff {
-			let header: *const u8 = chunk[iter..].as_ptr();
-			let header: *const Header = header as *const Header;
-			let header: &Header = unsafe { &*header };
-			let payload = iter + size_of::<Header>();
-			if header.mode == 0x0b {
-				// This is a display update
-				for null in payload .. chunk.len() - 3 { // 3 bytes allowance for checksum/terminator
-					if chunk[null] == 0x00 {
-						// End of payload
-						packets.push(Packet {
-							header: header,
-							payload: chunk[payload .. null].to_vec(),
-							_checksum: ((chunk[null+1] as u16) << 8) + (chunk[null+2] as u16),
-						});
-						iter = null + 3;
-						packet_start = iter + 1;
-						break;
-					}
-				}
-			} else {
-				// println!("{:?}", header);
-			}
-		}
-		iter += 1;
-	}
-	println!("Returning {} unprocessed bytes", chunk.len() - packet_start);
-	*chunk = chunk[packet_start..].to_vec();
-	return packets;
-}
-
-fn decode(packet: Packet, status: &mut HashMap<&str, String>) -> () {
-	// println!("{:?}", packet);
-	// let payload = OsString::from_vec(packet.payload.clone());
-	// let payload = payload.to_string_lossy();
-	match packet.header.row {
-		1 => {
-			status.insert("genset/engaged",
-				match packet.payload[0] == 0x03 && packet.payload[4] != 0xa4 {
-					true  => "1".to_string(),
-					false => "0".to_string(),
-				}
-			);
-		},
-		2 => {
-			let re = Regex::new(r"^(\d+\.\d)kW\s+(\x01|\x02)\s+(-?\d+\.\d+)kW.+?(o|\x06)(o|\x06)").unwrap();
-			let caps: Vec<String> =
-				re.captures(packet.payload.as_slice())
-				  .unwrap()
-				  .iter()
-				  .map(|c|
-					String::from_utf8(
-						c.unwrap()
-						 .as_bytes()
-						 .to_vec())
-					.unwrap())
-				  .collect();
-			status.insert("genset/output", caps[1].parse().unwrap());
-			status.insert("flow",
-				match caps[2].as_str() {
-					"\u{1}" => "charge".to_string(),
-					"\u{2}" => "discharge".to_string(),
-					_       => "unknown".to_string(),
-				}
-			);
-			status.insert("load", caps[3].parse().unwrap());
-			status.insert("battery/fan", match caps[4] != "o" { true => "1".to_string(), false => "0".to_string() });
-			status.insert("genset/requested", match caps[5] != "o" { true => "1".to_string(), false => "0".to_string() });
-		},
-		3 => {
-			let re = Regex::new(r"^[\*!\?]").unwrap();
-			let engaged = match re.captures(packet.payload.as_slice()) {
-				Some(c) => {
-					let s = status.clone();
-					let output = match s.get(&"genset/output") {
-						Some(o) => o,
-						None    => "",
-					};
-					match c[0][0] {
-						33 if output == "0.0" => "0",
-						_ => "1"
-					}
-				},
-				None => {
-					"0"
-				}
-			};
-			status.insert("genset/engaged", engaged.to_string());
-		},
-		4 => {
-			let re = Regex::new(r"\s+(\d+)%\s+\d{2}:\d{2}:\d{2}").unwrap();
-			let caps = re.captures(packet.payload.as_slice()).unwrap();
-			status.insert("battery/charge", String::from_utf8(caps[1].to_vec()).unwrap().parse().unwrap());
-		},
-		_ => {},
-	}
-	// println!("{:?}", payload);
 }
 
 fn mqtt_publish(m: &Mosquitto, topic: &String, status: &HashMap<&str, String>) {
