@@ -1,7 +1,7 @@
 // PPP header definition
 // begin addr ctrl  head  pad0 mode col row pad1        payload       cksm end
 // 7e    ff   03    4243  01   0b   01  01  00 00 00 00 Some data 00  dead 7e
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 #[repr(C, packed)]
 pub struct Header {
 	begin: u8,
