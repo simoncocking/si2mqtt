@@ -15,11 +15,34 @@ pub struct Header {
 	pad1: u32,
 }
 
+impl Header {
+	pub fn new(mode: u8, row: u8) -> Self {
+		Header {
+			begin: 0,
+			addr: 0,
+			ctrl: 0,
+			head: 0,
+			pad0: 0,
+			mode,
+			col: 0,
+			row,
+			pad1: 0
+		}
+	}
+}
+
 // PPP packet definition
 #[derive(Debug)]
-pub struct Packet<'a> {
-	pub header: &'a Header,
+pub struct Packet {
+	pub header: Header,
 	pub payload: Vec<u8>,
 	pub _checksum: u16,
 }
 
+impl Packet {
+	pub fn new(mode: u8, row: u8, payload: Vec<u8>, _checksum: u16) -> Packet {
+		Packet {
+			header: Header::new(mode, row), payload, _checksum
+		}
+	}
+}

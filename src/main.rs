@@ -3,7 +3,10 @@ extern crate serde_derive;
 extern crate docopt;
 extern crate mosquitto_client as mosq;
 extern crate regex;
+#[macro_use]
+extern crate nom;
 
+pub mod nom_parse;
 pub mod parse;
 pub mod decode;
 pub mod ppp_packet;
