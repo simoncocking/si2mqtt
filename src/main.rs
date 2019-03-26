@@ -91,11 +91,4 @@ fn mqtt_publish(m: &Mosquitto, topic: &String, status: &HashMap<&str, String>) {
 		let t = format!("{}/{}", topic, k);
 		let _mid = m.publish(t.as_str(), v.as_bytes(), 2, false);
 	}
-	// m.subscribe("power/#", 1).expect("Cannot subscribe");
-	// let mut mc = m.callbacks(0);
-	// mc.on_message(|_data,msg| {
-	// 	println!("received {:?} = {}", msg.topic(), msg.text());
-	// });
-	// m.loop_until_disconnect(200).expect("Broken loop");
-	// println!("Received {} messages", mc.data);
 }
