@@ -6,17 +6,22 @@ extern crate regex;
 extern crate tokio;
 extern crate futures;
 
-use std::path::Path;
+pub mod parse;
+pub mod decode;
+pub mod ppp_packet;
+
 use docopt::Docopt;
-use tokio::prelude::*;
+use std::error::Error;
+use std::io::prelude::*;
+use std::fs::File;
+use std::path::Path;
 use std::collections::HashMap;
 use std::mem::size_of;
 use regex::bytes::Regex;
 use mosq::Mosquitto;
-use futures::io::Error;
-use tokio::timer::Interval;
-use std::time::{Duration, Instant};
-use std::sync::Arc;
+
+use parse::parse;
+use decode::decode;
 
 const USAGE: &'static str = "
 si2mqtt: Read data off the SMA Sunny Island RS485 display bus
@@ -38,45 +43,6 @@ struct Args {
 	flag_port: String,
 	flag_mqtt: String,
 	flag_topic: String,
-}
-
-// flag addr ctrl proto vers mode col row pad         payload       cksm end
-// 7e   ff   03   4243  01   0b   01  01  00 00 00 00 Some data 00  dead 7e
-#[derive(Debug, Copy)]
-#[repr(C, packed)]
-struct Header {
-	flag: u8,
-	addr: u8,
-	ctrl: u8,
-	proto: u16,
-	vers: u8,
-	mode: u8,
-	col: u8,
-	row: u8,
-	pad: u32,
-}
-
-impl Clone for Header {
-	fn clone(&self) -> Self {
-		Self {
-			flag:  self.flag,
-			addr:  self.addr,
-			ctrl:  self.ctrl,
-			proto: self.proto,
-			vers:  self.vers,
-			mode:  self.mode,
-			col:   self.col,
-			row:   self.row,
-			pad:   self.pad,
-		}
-	}
-}
-
-#[derive(Debug)]
-struct Packet<'a> {
-	header: &'a Header,
-	payload: Vec<u8>,
-	_checksum: u16,
 }
 
 fn main() {
