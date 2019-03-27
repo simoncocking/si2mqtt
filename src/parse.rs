@@ -129,6 +129,24 @@ mod tests {
 	}
 
 	#[test]
+	fn bytes_before_packet_get_dropped() {
+		// Extraneous data + packet
+		let mut partial_packet: Vec<u8> = [0, 0, 0, 0].to_vec();
+		partial_packet.extend(SIMPLE_PACKET.to_vec());
+
+		// our vector of received data should contain data
+		assert_eq!(partial_packet.len(), 4 + SIMPLE_PACKET.len());
+
+		{
+			let packets = parse(&mut partial_packet);
+			assert_eq!(packets.len(), 1);
+		}
+
+		// extraneous data + packet data all consumed
+		assert_eq!(partial_packet.len(), 0);
+	}
+
+	#[test]
 	#[ignore]
 	fn non_0x0b_mode_packets_are_dropped() {
 		let mut buffer: Vec<u8> = SIMPLE_PACKET.to_vec();

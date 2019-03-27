@@ -10,7 +10,8 @@ pub fn not_null(chr: u8) -> bool {
 
 named!(nom_parse<&[u8], Packet>,
     do_parse!(
-        tag!([0x7eu8, 0xff])                    >> // begin packet
+        take_until!("\x7e")                     >> // drop unrecognised data
+        tag!(b"\x7e\xff")                       >> // begin packet
         take!(4)                                >> // addr, ctrl, head (all discarded)
         mode: le_u8                             >> // mode
         take!(1)                                >> // col
@@ -19,7 +20,7 @@ named!(nom_parse<&[u8], Packet>,
         payload: take_while!(not_null)          >> // payload
         take!(1)                                >> // payload-end
         cksm: le_u16                            >> // cksm
-        tag!([0x7eu8])                          >>
+        tag!("\x7e")                            >>
         (
             Packet::new(mode, row, payload.to_vec(), cksm)
         )
@@ -130,6 +131,24 @@ mod tests {
         // no change observed
         assert!(buffer.len() > 0);
 
+    }
+
+    #[test]
+    fn bytes_before_packet_get_dropped() {
+        // Extraneous data + packet
+        let mut buffer: Vec<u8> = [0, 0, 0, 0].to_vec();
+        buffer.extend(SIMPLE_PACKET.to_vec());
+
+        // our vector of received data should contain data
+        assert_eq!(buffer.len(), 4 + SIMPLE_PACKET.len());
+
+        {
+            let packets = parse(&mut buffer);
+            assert_eq!(packets.len(), 1);
+        }
+
+        // extraneous data + packet data all consumed
+        assert_eq!(buffer.len(), 0);
     }
 
     #[test]
