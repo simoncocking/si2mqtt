@@ -127,4 +127,23 @@ mod tests {
 		assert!(partial_packet.len() > 0);
 
 	}
+
+	#[test]
+	#[ignore]
+	fn non_0x0b_mode_packets_are_dropped() {
+		let mut buffer: Vec<u8> = SIMPLE_PACKET.to_vec();
+		buffer[6] = 0x0c;
+
+		// our vector of received data should contain data
+		assert!(buffer.len() > 0);
+
+		{
+			let packets = parse(&mut buffer);
+			assert_eq!(packets.len(), 0);
+
+		}
+
+		// bytes should still have been consumed
+		assert_eq!(buffer.len(), 0);
+	}
 }
