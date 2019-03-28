@@ -11,7 +11,7 @@ pub fn parse(chunk: &mut Vec<u8>) -> Vec<Packet> {
 	let mut packets: Vec<Packet> = Vec::new();
 	let mut iter: usize = 0;
 	let mut packet_start: usize = 0;
-	while iter < chunk.len() - size_of::<Header>() {
+	while chunk.len() > 0 && iter < chunk.len() - size_of::<Header>() {
 		if chunk[iter] == 0x7e && chunk[iter+1] == 0xff {
 			let header: *const u8 = chunk[iter..].as_ptr();
 			let header: *const Header = header as *const Header;
@@ -23,7 +23,7 @@ pub fn parse(chunk: &mut Vec<u8>) -> Vec<Packet> {
 					if chunk[null] == 0x00 {
 						// End of payload
 						packets.push(Packet {
-							header: header,
+							header: header.clone(),
 							payload: chunk[payload .. null].to_vec(),
 							_checksum: ((chunk[null+1] as u16) << 8) + (chunk[null+2] as u16),
 						});
@@ -41,17 +41,4 @@ pub fn parse(chunk: &mut Vec<u8>) -> Vec<Packet> {
 	println!("Returning {} unprocessed bytes", chunk.len() - packet_start);
 	*chunk = chunk[packet_start..].to_vec();
 	return packets;
-}
-
-#[cfg(test)]
-mod tests {
-       pub use super::parse;
-
-    #[test]
-    #[ignore]
-    fn empty_vector_yields_no_packets() {
-        let mut empty_vec: Vec<u8> = Vec::new();
-        let packets = parse(&mut empty_vec);
-        assert_eq!(packets.len(), 0);
-    }
 }
